@@ -1,0 +1,69 @@
+{
+  "name": "@ridewolf/maplibre-zone-editor",
+  "version": "0.1.0",
+  "description": "Headless polygon zone editor for MapLibre GL on top of mapbox-gl-draw: draw/edit modes, undo stack, double-click vertex deletion with a triangle guard, and clean geometry events. Framework-agnostic.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ridewolf/maplibre-zone-editor.git"
+  },
+  "homepage": "https://github.com/Ridewolf/maplibre-zone-editor#readme",
+  "bugs": "https://github.com/Ridewolf/maplibre-zone-editor/issues",
+  "author": "Ridewolf (https://ridewolf.com)",
+  "keywords": [
+    "maplibre",
+    "mapbox-gl-draw",
+    "polygon",
+    "zone",
+    "geofence",
+    "editor",
+    "draw",
+    "gis",
+    "headless"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "changeset": "changeset",
+    "build": "bun build ./src/index.ts --outdir dist --format esm --target browser --external maplibre-gl --external @mapbox/mapbox-gl-draw && tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.1.0",
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.29.0",
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
+    "@types/bun": "^1.3.14",
+    "@types/geojson": "^7946.0.16",
+    "maplibre-gl": "^6.1.0",
+    "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "maplibre-gl": "^6.1.0",
+    "@mapbox/mapbox-gl-draw": ">=1.4"
+  }
+}

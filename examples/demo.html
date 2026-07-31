@@ -1,0 +1,339 @@
+<!-- The zone editor on a real MapLibre map, with the toolbar the package
+     deliberately does not ship. No tile server and no API key: the basemap is a
+     synthetic downtown generated below as GeoJSON, so the demo runs offline.
+
+       cd maplibre-zone-editor && bun install && bun run build && bunx serve .
+       → http://localhost:3000/examples/demo.html -->
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>maplibre-zone-editor demo</title>
+<link rel="stylesheet" href="../node_modules/maplibre-gl/dist/maplibre-gl.css" />
+<link rel="stylesheet" href="../node_modules/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css" />
+<style>
+  :root {
+    --accent: #3b82f6;
+    --panel: #111a2b;
+  }
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: #0b1220;
+    color: #e2e8f0;
+    font: 14px ui-sans-serif, system-ui;
+  }
+  #map {
+    position: absolute;
+    inset: 0;
+  }
+  /* mapbox-gl-draw hides the crosshair cursor behind its own; keep it obvious. */
+  .maplibregl-canvas {
+    outline: none;
+  }
+  .panel {
+    position: absolute;
+    z-index: 2;
+    top: 16px;
+    left: 16px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 10px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  }
+  button {
+    padding: 7px 12px;
+    border: 1px solid #26334a;
+    border-radius: 8px;
+    background: #1b2537;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover {
+    border-color: #35456180;
+  }
+  button[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 24%, #1b2537);
+  }
+  .stat {
+    padding-left: 6px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+  }
+  .toast {
+    position: absolute;
+    z-index: 2;
+    top: 78px;
+    left: 16px;
+    padding: 8px 12px;
+    border-left: 3px solid #f59e0b;
+    border-radius: 8px;
+    background: #2a1f0d;
+    color: #fcd34d;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .toast[data-shown='true'] {
+    opacity: 1;
+  }
+</style>
+
+<div id="map"></div>
+<div class="panel">
+  <button type="button" data-act="draw">Draw zone</button>
+  <button type="button" data-act="edit">Edit vertices</button>
+  <button type="button" data-act="undo">Undo</button>
+  <button type="button" data-act="delete">Delete</button>
+  <span class="stat" id="stat">no zone</span>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="../node_modules/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.js"></script>
+<script type="module">
+  import { createZoneEditor } from '../dist/index.js';
+  // maplibre-gl v6 exports no default — the Map class is a named export.
+  import { Map as MapLibreMap } from '../node_modules/maplibre-gl/dist/maplibre-gl.mjs';
+
+  // ── A basemap with no server behind it ────────────────────────────────────
+  // A downtown grid with buildings, parks, avenues and a waterfront, generated
+  // from a coordinate hash. Enough city to judge a geofence against, and it
+  // costs zero tile requests — no key, no quota, works on a plane.
+  const LAT0 = 37.752; // waterfront
+  const LNG0 = -122.46;
+  const STEP = 0.0022; // ~200 m blocks
+  const ROWS = 20;
+  const COLS = 36;
+
+  /** Deterministic per-cell noise — same city on every run. */
+  function hash(a, b) {
+    const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function ring(south, west, north, east) {
+    return [
+      [
+        [west, south],
+        [east, south],
+        [east, north],
+        [west, north],
+        [west, south],
+      ],
+    ];
+  }
+
+  function buildCity() {
+    const features = [];
+    const kerb = STEP * 0.16; // the gap between block and street centreline
+    const waterNorth = LAT0 + STEP;
+    const push = (kind, coordinates, extra) =>
+      features.push({ type: 'Feature', properties: { kind, ...extra }, geometry: { type: 'Polygon', coordinates } });
+
+    // The bay, plus a few piers reaching into it.
+    push('water', ring(LAT0 - STEP * 4, LNG0 - STEP, waterNorth, LNG0 + (COLS + 1) * STEP));
+    for (let c = 2; c < COLS; c += 4) {
+      const west = LNG0 + c * STEP + kerb;
+      push('block', ring(LAT0 - STEP * 1.2, west, waterNorth - kerb, west + STEP * 0.35));
+    }
+
+    for (let r = 1; r < ROWS; r += 1) {
+      for (let c = 0; c < COLS; c += 1) {
+        const south = LAT0 + r * STEP;
+        const west = LNG0 + c * STEP;
+        const north = south + STEP - kerb;
+        const east = west + STEP - kerb;
+        const seed = hash(r, c);
+
+        if (seed < 0.07) {
+          push('park', ring(south + kerb, west + kerb, north, east));
+          continue;
+        }
+        push('block', ring(south + kerb, west + kerb, north, east));
+
+        // Footprints: the block split 2×2, with gaps where the hash says so.
+        const midLat = (south + kerb + north) / 2;
+        const midLng = (west + kerb + east) / 2;
+        const cells = [
+          [south + kerb, west + kerb, midLat, midLng],
+          [south + kerb, midLng, midLat, east],
+          [midLat, west + kerb, north, midLng],
+          [midLat, midLng, north, east],
+        ];
+        for (let i = 0; i < cells.length; i += 1) {
+          if (hash(r * 7 + i, c * 13) < 0.28) continue; // a yard, not a building
+          const [s0, w0, n0, e0] = cells[i];
+          const pad = STEP * 0.035;
+          push('building', ring(s0 + pad, w0 + pad, n0 - pad, e0 - pad));
+        }
+      }
+    }
+
+    for (let r = 1; r <= ROWS; r += 1) {
+      const lat = LAT0 + r * STEP;
+      features.push({
+        type: 'Feature',
+        properties: { kind: 'street', class: r % 5 === 1 ? 'avenue' : 'street' },
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [LNG0, lat],
+            [LNG0 + COLS * STEP, lat],
+          ],
+        },
+      });
+    }
+    for (let c = 0; c <= COLS; c += 1) {
+      const lng = LNG0 + c * STEP;
+      features.push({
+        type: 'Feature',
+        properties: { kind: 'street', class: c % 6 === 0 ? 'avenue' : 'street' },
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [lng, waterNorth],
+            [lng, LAT0 + ROWS * STEP],
+          ],
+        },
+      });
+    }
+
+    return { type: 'FeatureCollection', features };
+  }
+
+  const map = new MapLibreMap({
+    container: 'map',
+    // MapLibre's 512 px tiles make a degree go twice as far as the 256 px maths
+    // suggests; row 4.4 is what puts the waterfront just inside the bottom edge.
+    center: [LNG0 + (COLS * STEP) / 2, LAT0 + 4.4 * STEP],
+    zoom: 14.2,
+    attributionControl: false,
+    style: {
+      version: 8,
+      sources: { city: { type: 'geojson', data: buildCity() } },
+      layers: [
+        { id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } },
+        {
+          id: 'water',
+          type: 'fill',
+          source: 'city',
+          filter: ['==', ['get', 'kind'], 'water'],
+          paint: { 'fill-color': '#0f2b45' },
+        },
+        {
+          id: 'block',
+          type: 'fill',
+          source: 'city',
+          filter: ['==', ['get', 'kind'], 'block'],
+          paint: { 'fill-color': '#182133', 'fill-outline-color': '#212d43' },
+        },
+        {
+          id: 'building',
+          type: 'fill',
+          source: 'city',
+          filter: ['==', ['get', 'kind'], 'building'],
+          paint: { 'fill-color': '#222e44' },
+        },
+        {
+          id: 'park',
+          type: 'fill',
+          source: 'city',
+          filter: ['==', ['get', 'kind'], 'park'],
+          paint: { 'fill-color': '#173726' },
+        },
+        {
+          id: 'street',
+          type: 'line',
+          source: 'city',
+          filter: ['==', ['get', 'kind'], 'street'],
+          paint: {
+            'line-color': ['match', ['get', 'class'], 'avenue', '#3a4a66', '#2a3547'],
+            'line-width': ['match', ['get', 'class'], 'avenue', 4, 2],
+          },
+        },
+      ],
+    },
+  });
+
+  // ── The part that is actually the package ─────────────────────────────────
+  const stat = document.getElementById('stat');
+  const toast = document.getElementById('toast');
+  let toastTimer = 0;
+
+  /** Equirectangular shoelace — good to a fraction of a percent at city scale. */
+  function areaSqMeters(polygon) {
+    const points = polygon.coordinates[0];
+    const meanLat = points.reduce((sum, [, lat]) => sum + lat, 0) / points.length;
+    const mx = 111_320 * Math.cos((meanLat * Math.PI) / 180);
+    const my = 110_540;
+    let sum = 0;
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[i + 1];
+      sum += x1 * mx * (y2 * my) - x2 * mx * (y1 * my);
+    }
+    return Math.abs(sum) / 2;
+  }
+
+  const REASONS = {
+    'no-polygon': 'Draw a zone first — there is nothing to edit yet.',
+    'min-vertices': 'A polygon needs three corners. That vertex stays.',
+  };
+
+  const editor = createZoneEditor(map, window.MapboxDraw, {
+    color: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+    onChange: (polygon) => {
+      if (!polygon) {
+        stat.textContent = 'no zone';
+        return;
+      }
+      const corners = polygon.coordinates[0].length - 1; // the ring repeats its first point
+      const km2 = areaSqMeters(polygon) / 1_000_000;
+      stat.textContent = `${corners} corners · ${km2.toFixed(2)} km²`;
+    },
+    onInvalidAction: (reason) => {
+      toast.textContent = REASONS[reason] ?? reason;
+      toast.dataset.shown = 'true';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.dataset.shown = 'false';
+      }, 2600);
+    },
+  });
+  editor.attach();
+
+  // ── Bring your own buttons ───────────────────────────────────────────────
+  const buttons = [...document.querySelectorAll('button[data-act]')];
+  function setMode(act) {
+    for (const button of buttons) {
+      button.setAttribute('aria-pressed', String(button.dataset.act === act));
+    }
+  }
+  const actions = {
+    draw: () => {
+      editor.startDrawing();
+      setMode('draw');
+    },
+    edit: () => {
+      editor.startEditing();
+      setMode('edit');
+    },
+    undo: () => editor.undo(),
+    delete: () => {
+      editor.deletePolygon();
+      setMode(null);
+    },
+  };
+  for (const button of buttons) {
+    button.onclick = () => actions[button.dataset.act]();
+  }
+
+  map.on('idle', () => {
+    window.__demoReady = true;
+  });
+</script>

@@ -1,0 +1,9 @@
+@ridewolf/maplibre-zone-editor
+Copyright 2026 Ridewolf (https://ridewolf.com)
+
+This product includes software developed at Ridewolf, extracted from the
+geofence-zone editor of its fleet operations dashboard.
+
+MapLibre is a trademark of the MapLibre project / Linux Foundation.
+mapbox-gl-draw is a project of Mapbox, Inc. This package is affiliated
+with neither.
