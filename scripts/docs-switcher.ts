@@ -44,13 +44,6 @@ const LOCALES = [
 const OPEN_MARKER = '<!-- docs-i18n:switcher -->';
 const CLOSE_MARKER = '<!-- /docs-i18n:switcher -->';
 
-/**
- * The generated region. The markers are the anchor — matching "the first centered
- * `<sub>` line" instead would let this script overwrite any other centered small-text
- * line that happens to come first, which is a silent way to lose content.
- */
-const MARKED_BLOCK = new RegExp(`${OPEN_MARKER}\\n[\\s\\S]*?\\n${CLOSE_MARKER}`);
-
 /** Migration fallback for files that predate the markers — see `locateSwitcher`. */
 const CENTERED_SUB_LINE = /^<p align="center"><sub>.*<\/sub><\/p>$/gm;
 
@@ -59,6 +52,53 @@ const TRANSLATION_NOTICE = /^> 🌐 .*$/m;
 
 /** How many locale names a bare line must carry before it counts as a switcher. */
 const SWITCHER_LABEL_QUORUM = 3;
+
+const countOccurrences = (source: string, marker: string): number =>
+  source.split(marker).length - 1;
+
+/**
+ * Windows checkouts have CRLF READMEs (`core.autocrlf=true`, git's default there), and
+ * drift is decided by string equality — so a block joined with `\n` would report all 16
+ * files as drifted, fail the hook on every commit, and "fix" them into mixed endings
+ * that the next checkout reverts. `.gitattributes` pins the repo to LF; this keeps the
+ * script honest on a tree that arrived some other way.
+ *
+ * The majority ending, not the first one seen: a single stray CRLF — one line pasted from
+ * a Windows terminal — would otherwise be enough to rewrite the block with CRLF in an
+ * all-LF file, which converges but leaves the endings mixed.
+ */
+const lineEndingOf = (source: string): string =>
+  countOccurrences(source, '\r\n') * 2 > countOccurrences(source, '\n') ? '\r\n' : '\n';
+
+/**
+ * A file may carry at most one marker pair, open before close. Anything else — a
+ * duplicate, an orphan left by a hand-edit or a bad merge, a swapped pair — is ambiguous
+ * about which span is the generated one, and guessing means deleting whatever sits
+ * between the wrong markers.
+ *
+ * This runs before any span is chosen, so the counts it reports are the ones in the file
+ * the reader is about to open. Validating after a transform instead would report the
+ * markers this script just added and send them looking for a stray that is not there.
+ */
+const assertMarkersWellFormed = (source: string, locale: string): void => {
+  const opens = countOccurrences(source, OPEN_MARKER);
+  const closes = countOccurrences(source, CLOSE_MARKER);
+
+  if (opens !== closes || opens > 1) {
+    throw new Error(
+      `${displayPath(locale)}: expected one ${OPEN_MARKER} / ${CLOSE_MARKER} pair, found ` +
+        `${opens} open and ${closes} close. Remove the stray marker — leaving it would ` +
+        'let this script overwrite the content between it and the real block.',
+    );
+  }
+
+  if (opens === 1 && source.indexOf(CLOSE_MARKER) < source.indexOf(OPEN_MARKER)) {
+    throw new Error(
+      `${displayPath(locale)}: ${CLOSE_MARKER} comes before ${OPEN_MARKER}. Swap them, so ` +
+        'the generated block is the region between the pair rather than everything outside it.',
+    );
+  }
+};
 
 const relativePath = (from: string, to: string): string => {
   if (from === 'en') return `docs/i18n/${to}/README.md`;
@@ -70,11 +110,20 @@ const switcherFor = (locale: string): string =>
     code === locale ? `<b>${label}</b>` : `<a href="${relativePath(locale, code)}">${label}</a>`,
   ).join(' · ')}</sub></p>`;
 
-const blockFor = (locale: string): string =>
-  `${OPEN_MARKER}\n${switcherFor(locale)}\n${CLOSE_MARKER}`;
+const blockFor = (locale: string, eol: string): string =>
+  `${OPEN_MARKER}${eol}${switcherFor(locale)}${eol}${CLOSE_MARKER}`;
 
 const readmeFor = (locale: string): string =>
   locale === 'en' ? join(ROOT, 'README.md') : join(I18N_DIR, locale, 'README.md');
+
+/**
+ * How a file is named in anything a human reads. Never the absolute path: the pre-commit
+ * hook runs this script against a temp copy of the index and deletes it on exit, so an
+ * absolute path in an error message points at a directory that is already gone by the
+ * time anyone reads it — and the hook deliberately adds no advice of its own, trusting
+ * these messages to be the actionable ones.
+ */
+const displayPath = (locale: string): string => readmeFor(locale).slice(ROOT.length + 1);
 
 /**
  * A centered line is only the switcher if it actually lists languages. Without this,
@@ -84,11 +133,25 @@ const readmeFor = (locale: string): string =>
 const looksLikeSwitcher = (line: string): boolean =>
   LOCALES.filter(([, label]) => line.includes(label)).length >= SWITCHER_LABEL_QUORUM;
 
-/** The span the generated block should replace, or null when the file has none yet. */
+/**
+ * The span the generated block should replace, or null when the file has none yet.
+ *
+ * The markers are the anchor — matching "the first centered `<sub>` line" instead would
+ * let this script overwrite any other centered small-text line that happens to come
+ * first, which is a silent way to lose content.
+ *
+ * Plain `indexOf`, not a regex over the region: `assertMarkersWellFormed` has already
+ * established there is at most one of each marker and that open comes first, so the two
+ * offsets *are* the span. A regex would additionally have to decide what may sit between
+ * the markers, and the obvious `OPEN\n…\nCLOSE` shape quietly requires a line between
+ * them — so a pair added by hand on adjacent lines, which is exactly what the error in
+ * `applySwitcher` asks for, would not be recognized as the block at all.
+ */
 const locateSwitcher = (source: string): { start: number; end: number } | null => {
-  const marked = source.match(MARKED_BLOCK);
-  if (marked?.index !== undefined) {
-    return { start: marked.index, end: marked.index + marked[0].length };
+  const open = source.indexOf(OPEN_MARKER);
+  const close = source.indexOf(CLOSE_MARKER);
+  if (open !== -1 && close > open) {
+    return { start: open, end: close + CLOSE_MARKER.length };
   }
 
   // Pre-marker files: take the first centered line that reads like a switcher, and
@@ -103,7 +166,10 @@ const locateSwitcher = (source: string): { start: number; end: number } | null =
 
 /** Replaces the generated block, or inserts one when the file has none yet. */
 const applySwitcher = (source: string, locale: string): string => {
-  const block = blockFor(locale);
+  assertMarkersWellFormed(source, locale);
+
+  const eol = lineEndingOf(source);
+  const block = blockFor(locale, eol);
 
   const span = locateSwitcher(source);
   if (span) return source.slice(0, span.start) + block + source.slice(span.end);
@@ -111,12 +177,12 @@ const applySwitcher = (source: string, locale: string): string => {
   const notice = source.match(TRANSLATION_NOTICE);
   if (notice?.index === undefined) {
     throw new Error(
-      `${readmeFor(locale)}: no switcher and no translation notice to anchor one to — ` +
+      `${displayPath(locale)}: no switcher and no translation notice to anchor one to — ` +
         `add a ${OPEN_MARKER} / ${CLOSE_MARKER} pair by hand once, then re-run.`,
     );
   }
   const at = notice.index + notice[0].length;
-  return `${source.slice(0, at)}\n\n${block}${source.slice(at)}`;
+  return `${source.slice(0, at)}${eol}${eol}${block}${source.slice(at)}`;
 };
 
 /**
@@ -159,13 +225,13 @@ const main = (): void => {
     const updated = applySwitcher(source, locale);
     if (updated === source) continue;
 
-    const shown = path.slice(ROOT.length + 1);
+    const shown = displayPath(locale);
 
-    // One pass has to be enough, checked before anything is written. A half-deleted
-    // marker pair leaves the fallback inserting a fresh block below the orphan, which
-    // this run cannot detect and the next one silently repairs — and "I ran the fixer
-    // and CI still says it's out of date" is the exact confusion this script exists
-    // to prevent.
+    // One pass has to be enough, checked before anything is written: "I ran the fixer
+    // and CI still says it's out of date" is the exact confusion this script exists to
+    // prevent. Stray markers are `assertMarkersWellFormed`'s job — it rejects them
+    // before a span is chosen, because by the time a mangled file converges here there
+    // is nothing left to compare it against.
     if (applySwitcher(updated, locale) !== updated) {
       throw new Error(
         `${shown}: the switcher region did not converge in one pass. Look for a stray ` +
