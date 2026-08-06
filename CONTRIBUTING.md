@@ -21,14 +21,17 @@ bun run docs:switcher # re-render the README language switcher
 ```
 
 `bun install` points `core.hooksPath` at [.githooks](.githooks), where a pre-commit hook
-runs the same switcher check as CI whenever a commit touches a README. It reads your
-index rather than your working tree — so its verdict is about the commit, not about
-whatever you have on disk — and it never writes: if it fails, run `bun run docs:switcher`
-and stage the result. It steps aside with a message rather than blocking you when `bun`
-is off PATH (GUI clients, IDEs), and CI still catches the drift.
+runs the same switcher check as CI whenever a commit touches a README or the switcher
+script itself — editing `LOCALES` drifts all 16 files without staging a single README.
+It reads your index rather than your working tree — so its verdict is about the commit,
+not about whatever you have on disk — and it never writes: if it fails, run
+`bun run docs:switcher` and stage the result. It steps aside with a message rather than
+blocking you when `bun` is off PATH (GUI clients, IDEs), and CI still catches the drift.
 
-If you already use husky, lefthook, or a global hooks directory, the installer leaves
-your `core.hooksPath` alone and says so; wire `.githooks/pre-commit` in yourself.
+If your checkout already has hooks — a `core.hooksPath` set by husky or lefthook, or
+files in `.git/hooks` from husky v4, `pre-commit`, or an IDE — the installer leaves them
+alone and says so, because `core.hooksPath` would replace the lot. Call
+`.githooks/pre-commit` from your own hook, or run `bun run docs:switcher:check` yourself.
 
 ## Editing the README
 
