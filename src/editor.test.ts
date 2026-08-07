@@ -10,6 +10,57 @@ import type {
   ZonePolygon,
 } from './types';
 
+// ── A compile-time guard, not a runtime test ─────────────────────────────────
+//
+// The fakes below satisfy MapLike trivially, which is exactly why they missed
+// the bug this guards: MapLibre types `on`/`off` as a generic overload set keyed
+// by its event map, and an overloaded method only assigns to a target signature
+// one of its overloads matches. Narrow the handler and a real `maplibregl.Map`
+// stops satisfying MapLike, pushing every consumer into
+// `map as unknown as MapLike`.
+//
+// This mimics that shape — layer-scoped overload first, as MapLibre declares it
+// — so `tsc --noEmit` catches a regression without this package taking a
+// dependency on maplibre-gl.
+interface MapLibreEventMap {
+  click: { point: { x: number; y: number } };
+  dblclick: { point: { x: number; y: number } };
+}
+
+interface OverloadedEventedMap {
+  addControl(control: unknown, position?: string): unknown;
+  removeControl(control: unknown): unknown;
+  on<T extends keyof MapLibreEventMap>(
+    type: T,
+    layer: string,
+    listener: (ev: MapLibreEventMap[T]) => void,
+  ): unknown;
+  on<T extends keyof MapLibreEventMap>(
+    type: T,
+    listener: (ev: MapLibreEventMap[T]) => void,
+  ): unknown;
+  off<T extends keyof MapLibreEventMap>(
+    type: T,
+    layer: string,
+    listener: (ev: MapLibreEventMap[T]) => void,
+  ): unknown;
+  off<T extends keyof MapLibreEventMap>(
+    type: T,
+    listener: (ev: MapLibreEventMap[T]) => void,
+  ): unknown;
+  queryRenderedFeatures(box: [[number, number], [number, number]]): RenderedVertex[];
+  fitBounds(bounds: unknown, options?: Record<string, unknown>): unknown;
+}
+
+// Inside a function that is never called: the return is an assignment check tsc
+// enforces, and nothing runs. (A top-level `const x: MapLike = declaredMap` reads
+// the same but evaluates at import time, and a `declare` has no runtime binding —
+// which crashes the whole suite before the first test.)
+function mapLikeAcceptsARealMap(map: OverloadedEventedMap): MapLike {
+  return map;
+}
+void mapLikeAcceptsARealMap;
+
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
 class FakeDraw {
