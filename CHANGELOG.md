@@ -1,5 +1,20 @@
 # @ridewolf/maplibre-zone-editor
 
+## 0.1.1
+
+### Patch Changes
+
+- [#2](https://github.com/Ridewolf/maplibre-zone-editor/pull/2) [`e0aa451`](https://github.com/Ridewolf/maplibre-zone-editor/commit/e0aa451dbf4652e00fd3495fdddfc1c93c6f346d) Thanks [@oxygrimmkiv](https://github.com/oxygrimmkiv)! - Verify this package's own trusted publisher. `0.1.0` was published by hand — npm cannot
+  configure a trusted publisher for a package that does not exist on the registry yet — so
+  the release workflow has never authenticated as itself here. `track-playback@0.1.1` has
+  since proved the workflow is correct, but each package carries its own trusted-publisher
+  entry, typed in separately, and a mistake in this one would first surface during a release
+  that mattered.
+
+  No functional change: the tarball is identical to `0.1.0` apart from the version and this
+  changelog entry. `0.1.1` is the first version published from CI, so it is also the first
+  to carry a provenance attestation.
+
 ## 0.1.0 — 2026-07-31
 
 ### Minor Changes
