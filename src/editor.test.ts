@@ -15,6 +15,7 @@ import type {
 class FakeDraw {
   collection: DrawCollection = { type: 'FeatureCollection', features: [] };
   mode = 'simple_select';
+  selectedIds: string[] = [];
   modeCalls: Array<{ mode: string; options?: Record<string, unknown> | undefined }> = [];
   trashed = 0;
 
@@ -41,9 +42,18 @@ class FakeDraw {
   getMode(): string {
     return this.mode;
   }
+  getSelectedIds(): string[] {
+    return this.selectedIds;
+  }
   changeMode(mode: string, options?: Record<string, unknown>): void {
     this.mode = mode;
     this.modeCalls.push({ mode, options });
+    // Mirror MapboxDraw: each mode takes its selection differently.
+    if (mode === 'direct_select' && typeof options?.featureId === 'string') {
+      this.selectedIds = [options.featureId];
+    } else if (mode === 'simple_select' && Array.isArray(options?.featureIds)) {
+      this.selectedIds = options.featureIds as string[];
+    }
   }
   trash(): void {
     this.trashed++;
@@ -116,10 +126,13 @@ function setup(options: { color?: string } = {}) {
   const map = new FakeMap();
   const changes: Array<ZonePolygon | null> = [];
   const invalid: InvalidActionReason[] = [];
-  let drawInstance: FakeDraw | null = null;
+  // Every instance, in order: `setColor` rebuilds the control, and a test that
+  // held the first one would be asserting against a discarded object.
+  const built: FakeDraw[] = [];
   const Ctor = function (this: unknown, opts: Record<string, unknown>) {
-    drawInstance = new FakeDraw(opts);
-    return drawInstance;
+    const instance = new FakeDraw(opts);
+    built.push(instance);
+    return instance;
   } as unknown as DrawConstructor;
 
   const editor = createZoneEditor(map, Ctor, {
@@ -128,8 +141,22 @@ function setup(options: { color?: string } = {}) {
     onInvalidAction: (r) => invalid.push(r),
   });
   editor.attach();
-  if (!drawInstance) throw new Error('draw not constructed');
-  return { map, editor, draw: drawInstance as FakeDraw, changes, invalid };
+  const first = built[0];
+  if (!first) throw new Error('draw not constructed');
+  return {
+    map,
+    editor,
+    draw: first,
+    built,
+    /** The control currently wired to the map. */
+    current: (): FakeDraw => {
+      const latest = built[built.length - 1];
+      if (!latest) throw new Error('draw not constructed');
+      return latest;
+    },
+    changes,
+    invalid,
+  };
 }
 
 const dbl = (prevent = { count: 0 }) => ({
@@ -150,6 +177,103 @@ describe('lifecycle', () => {
     expect(map.controls).toHaveLength(0);
     expect(map.handlers.get('draw.create')?.size).toBe(0);
     editor.detach(); // idempotent
+  });
+
+  it('carries the polygon, mode and selection across detach/attach', () => {
+    const { editor, draw } = setup();
+    editor.setGeometry(square());
+    draw.changeMode('direct_select', { featureId: 'f1' });
+    draw.modeCalls.length = 0;
+
+    // What a basemap swap does: pull the control off, put it back once the new
+    // style has loaded.
+    editor.detach();
+    editor.attach();
+
+    expect(editor.getGeometry()).toEqual(square());
+    expect(draw.getMode()).toBe('direct_select');
+    expect(draw.modeCalls).toContainEqual({
+      mode: 'direct_select',
+      options: { featureId: 'f1' },
+    });
+  });
+
+  it('restores a multi-feature selection as a set, not as one feature', () => {
+    const { editor, draw } = setup();
+    editor.setGeometry(square());
+    draw.changeMode('simple_select', { featureIds: ['f1', 'f2'] });
+    draw.modeCalls.length = 0;
+
+    editor.detach();
+    editor.attach();
+
+    expect(draw.modeCalls).toContainEqual({
+      mode: 'simple_select',
+      options: { featureIds: ['f1', 'f2'] },
+    });
+  });
+
+  it('attaching without a prior detach restores nothing', () => {
+    const { editor, draw } = setup();
+    editor.setGeometry(square());
+    draw.modeCalls.length = 0;
+    editor.attach(); // already attached — no-op
+    expect(draw.modeCalls).toHaveLength(0);
+  });
+});
+
+describe('setColor', () => {
+  it('rebuilds the control with the new styles', () => {
+    const { editor, built, current } = setup({ color: '#111111' });
+    editor.setColor('#22c55e');
+
+    expect(built).toHaveLength(2);
+    const styles = JSON.stringify(current().ctorOptions.styles);
+    expect(styles).toContain('#22c55e');
+    expect(styles).not.toContain('#111111');
+  });
+
+  it('keeps the polygon, mode and selection through the rebuild', () => {
+    const { editor, draw, current } = setup({ color: '#111111' });
+    editor.setGeometry(square());
+    draw.changeMode('direct_select', { featureId: 'f1' });
+
+    editor.setColor('#22c55e');
+
+    expect(editor.getGeometry()).toEqual(square());
+    expect(current().getMode()).toBe('direct_select');
+    expect(current().modeCalls).toContainEqual({
+      mode: 'direct_select',
+      options: { featureId: 'f1' },
+    });
+  });
+
+  it('leaves the new control attached to the map', () => {
+    const { map, editor, current } = setup();
+    editor.setColor('#22c55e');
+    expect(map.controls).toHaveLength(1);
+    expect(map.controls[0]).toBe(current());
+    expect(map.handlers.get('draw.create')?.size).toBe(1);
+  });
+
+  it('does nothing when the colour has not changed', () => {
+    const { editor, built } = setup({ color: '#111111' });
+    editor.setColor('#111111');
+    expect(built).toHaveLength(1);
+  });
+
+  it('works while detached, and the new control comes back on attach', () => {
+    const { map, editor, built, current } = setup({ color: '#111111' });
+    editor.setGeometry(square());
+    editor.detach();
+
+    editor.setColor('#22c55e');
+    expect(built).toHaveLength(2);
+    expect(map.controls).toHaveLength(0);
+
+    editor.attach();
+    expect(map.controls[0]).toBe(current());
+    expect(editor.getGeometry()).toEqual(square());
   });
 });
 
