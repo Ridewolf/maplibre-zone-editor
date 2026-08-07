@@ -42,6 +42,7 @@ export interface DrawLike {
   delete(featureId: string): unknown;
   deleteAll(): unknown;
   getMode(): string;
+  getSelectedIds(): string[];
   changeMode(mode: string, options?: Record<string, unknown>): unknown;
   trash(): unknown;
 }

@@ -100,8 +100,29 @@ bun install && bun run build && bunx serve .   # → examples/demo.html
 | `deletePolygon()` | Remove the polygon (undoable). |
 | `undo()` | Step back through the snapshot stack. |
 | `getGeometry()` / `setGeometry(polygon \| null)` | GeoJSON in, GeoJSON out. `setGeometry` resets the undo stack and does not fire `onChange`. |
+| `setColor(color)` | Restyle the polygon, keeping the operator's place (see below). |
 
 Options: `color`, `onChange`, `onInvalidAction`, `maxUndoStates`, `vertexHitTolerance`.
+
+### Surviving a rebuild
+
+MapboxDraw bakes its styles in at construction, and a basemap swap tears custom
+layers off the map — so both a colour change and a style change mean rebuilding
+or re-adding the control. Done naively, that drops the operator out of whatever
+they were doing into an empty `simple_select`.
+
+`detach()` banks the polygon, the current mode and the selection; the next
+`attach()` restores them. A basemap swap is then:
+
+```ts
+editor.detach();
+map.setStyle(nextStyle);
+onceStyleIsReady(() => editor.attach()); // same polygon, same mode, same selection
+```
+
+and a colour change is just `editor.setColor('#22c55e')` — it rebuilds the
+control through that same pair, so the operator keeps their place and the undo
+stack survives, recolouring not being an edit.
 
 ## Documentation
 
