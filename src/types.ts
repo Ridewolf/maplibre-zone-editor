@@ -63,8 +63,22 @@ export interface RenderedVertex {
 export interface MapLike {
   addControl(control: unknown, position?: string): unknown;
   removeControl(control: unknown): unknown;
-  on(event: string, handler: (event: never) => void): unknown;
-  off(event: string, handler: (event: never) => void): unknown;
+  /**
+   * MapLibre types `on`/`off` as a generic overload set keyed by its event map,
+   * and an overloaded method is only assignable to a target signature one of its
+   * overloads matches. A handler typed anything narrower than `any` — `never`,
+   * `unknown`, or a variadic `never[]` — matches none of them, so a real
+   * `maplibregl.Map` fails to satisfy this interface and every consumer is pushed
+   * into `map as unknown as MapLike`. Which defeats the point of describing the
+   * surface structurally at all.
+   *
+   * The looseness is contained: these two are only ever called with the editor's
+   * own bound handlers, a few lines below in editor.ts.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: the only shape a real MapLibre Map satisfies — see above.
+  on(event: string, handler: (event: any) => void): unknown;
+  // biome-ignore lint/suspicious/noExplicitAny: symmetrical with `on`.
+  off(event: string, handler: (event: any) => void): unknown;
   queryRenderedFeatures(box: [[number, number], [number, number]]): RenderedVertex[];
   fitBounds(bounds: unknown, options?: Record<string, unknown>): unknown;
 }
