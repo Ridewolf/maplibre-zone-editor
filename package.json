@@ -1,6 +1,6 @@
 {
   "name": "@ridewolf/maplibre-zone-editor",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Headless polygon zone editor for MapLibre GL on top of mapbox-gl-draw: draw/edit modes, undo stack, double-click vertex deletion with a triangle guard, and clean geometry events. Framework-agnostic.",
   "license": "Apache-2.0",
   "type": "module",
