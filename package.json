@@ -58,8 +58,12 @@
     "@mapbox/mapbox-gl-draw": "^1.5.1",
     "@types/bun": "^1.3.14",
     "@types/geojson": "^7946.0.16",
+    "@types/mapbox__mapbox-gl-draw": "^1.4.9",
     "maplibre-gl": "^6.1.0",
     "typescript": "^5.9.0"
+  },
+  "overrides": {
+    "mapbox-gl": "npm:empty-npm-package@1.0.0"
   },
   "publishConfig": {
     "access": "public",

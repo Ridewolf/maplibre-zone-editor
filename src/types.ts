@@ -1,4 +1,4 @@
-import type { Polygon } from 'geojson';
+import type { Geometry, Polygon } from 'geojson';
 
 export type ZonePolygon = Polygon;
 
@@ -22,10 +22,12 @@ export interface ZoneEditorOptions {
 //    satisfy them structurally; tests satisfy them with fakes. ──────────────
 
 export interface DrawFeature {
-  id?: string | number;
+  // `| undefined` because exactOptionalPropertyTypes is on and MapboxDraw's
+  // GeoJSON features type `id` that way; without it the real class does not fit.
+  id?: string | number | undefined;
   type: 'Feature';
   properties: Record<string, unknown> | null;
-  geometry: { type: string; coordinates: unknown };
+  geometry: Geometry;
 }
 
 export interface DrawCollection {
@@ -47,12 +49,18 @@ export interface DrawLike {
   trash(): unknown;
 }
 
-/** A MapboxDraw-style constructor — inject the real one (or your fork). */
+/**
+ * A MapboxDraw-style constructor — inject the real one (or your fork).
+ *
+ * `styles` is `object[]`, not `unknown[]`: MapboxDrawOptions declares it that
+ * way, and `unknown[]` is not assignable to `object[]`, so the looser type made
+ * `typeof MapboxDraw` fail to satisfy this. Loose is not always safe.
+ */
 export type DrawConstructor = new (options: {
   displayControlsDefault: boolean;
   controls: Record<string, never>;
   defaultMode: string;
-  styles: unknown[];
+  styles: object[];
 }) => DrawLike;
 
 export interface RenderedVertex {
