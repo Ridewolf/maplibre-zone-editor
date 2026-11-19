@@ -28,7 +28,7 @@ export function patchMapboxDrawForMapLibre(MapboxDraw: unknown): void {
  * A minimal, accent-coloured draw style set: translucent fill, solid outline,
  * large vertex handles (finger-friendly), subtle midpoints.
  */
-export function buildDrawStyles(color: string): unknown[] {
+export function buildDrawStyles(color: string): object[] {
   return [
     {
       id: 'gl-draw-polygon-fill',
